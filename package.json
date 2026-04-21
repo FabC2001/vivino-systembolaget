@@ -1,31 +1,15 @@
 {
   "name": "vivino-systembolaget",
-  "version": "1.0.2",
-  "main": "index.js",
-  "author": "Roman Faizullin <roman@faizullin.info>",
+  "version": "2.0.0",
+  "description": "Show Vivino wine rating on Systembolaget",
   "license": "MIT",
-  "devDependencies": {
-    "npm-run-all": "^4.1.5",
-    "parcel": "^1.12.4"
-  },
-  "browserslist": [
-    "last 1 Chrome versions"
-  ],
+  "private": true,
   "scripts": {
-    "start": "run-p start:*",
-    "build": "run-s build:*",
-    "start:content": "parcel watch src/contentScript/contentScript.js -d public",
-    "start:bg": "parcel watch src/bgScript/bgScript.js -d public",
-    "build:content": "parcel build src/contentScript/contentScript.js -d public",
-    "build:bg": "parcel build src/bgScript/bgScript.js -d public"
+    "build": "node build.mjs",
+    "start": "node build.mjs --watch"
   },
-  "dependencies": {
-    "axios": "^0.21.1",
-    "axios-cache-adapter": "^2.5.0",
-    "axios-rate-limit": "^1.2.1",
-    "cheerio": "^1.0.0-rc.3",
-    "localforage": "^1.7.3",
-    "localforage-webextensionstorage-driver": "^2.0.0",
-    "lodash": "^4.17.15"
-  }
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "dependencies": {}
 }

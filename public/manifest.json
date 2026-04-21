@@ -1,17 +1,21 @@
 {
   "name": "Vivino rating for Systembolaget",
-  "version": "1.0.2",
-  "description": "Show wine rating on systembolaget website",
-  "manifest_version": 2,
-  "permissions": ["*://www.vivino.com/*", "unlimitedStorage", "activeTab"],
+  "version": "2.0.0",
+  "description": "Show vivino score on systembolaget wine pages",
+  "manifest_version": 3,
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": [
+    "*://www.vivino.com/*",
+    "*://www.systembolaget.se/*"
+  ],
   "content_scripts": [
     {
       "matches": ["https://www.systembolaget.se/*"],
-      "js": ["contentScript.js"]
+      "js": ["contentScript.js"],
+      "run_at": "document_idle"
     }
   ],
   "background": {
-    "scripts": ["bgScript.js"],
-    "persistent": false
+    "service_worker": "bgScript.js"
   }
 }
