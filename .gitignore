@@ -4,5 +4,3 @@ node_modules/
 .mcp.json
 .playwright-mcp/
 
-public/*
-!public/manifest.json
