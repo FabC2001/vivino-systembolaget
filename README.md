@@ -56,6 +56,12 @@ Output goes to `public/`. For live-rebuild during development:
 - **Debugging** — click `service worker` on the extension's card at
   `chrome://extensions/` to open background-script DevTools.
 
+## Credits
+
+Originally created by [Roman Faizullin](https://github.com/lazyd3v).
+This fork is a 2026 rewrite (Manifest V3, Algolia search, accuracy
+fixes) maintained by [FabC2001](https://github.com/FabC2001).
+
 ## Privacy
 
 - Only runs on `systembolaget.se` pages.
