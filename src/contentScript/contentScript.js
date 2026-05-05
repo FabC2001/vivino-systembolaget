@@ -2,6 +2,8 @@ import { getRating } from "./api/getRating";
 
 const PROCESSED_ATTR = "data-vivino-processed";
 const BADGE_CLASS = "vivino-rating-badge";
+const PRODUCT_CARD_ID = "vivino-product-card";
+const PRODUCT_PAGE_RE = /^\/produkt\/vin\/[^/]+\/?$/;
 
 // All wine product URLs are /produkt/vin/<slug>-<productNumber>/ regardless
 // of color, sparkling, fortified, etc.
@@ -224,17 +226,202 @@ async function processGroup(href, anchors) {
   }
 }
 
+// === Product detail page ===
+//
+// On /produkt/vin/<slug>-<id>/ pages we render a richer floating card with
+// region, tasting notes and a label thumbnail. Wine identity is parsed from
+// `og:title` / `document.title` (reliable across SPA hydration timings) and
+// the breadcrumb JSON-LD provides the type/color category.
+
+const COUNTRY_NAMES = {
+  fr: "France", it: "Italy", es: "Spain", pt: "Portugal", de: "Germany",
+  at: "Austria", ch: "Switzerland", us: "USA", ar: "Argentina", cl: "Chile",
+  za: "South Africa", au: "Australia", nz: "New Zealand", gr: "Greece",
+  hu: "Hungary", ro: "Romania", bg: "Bulgaria", lb: "Lebanon", il: "Israel",
+  ge: "Georgia", uy: "Uruguay", br: "Brazil", mx: "Mexico", ca: "Canada",
+  hr: "Croatia", si: "Slovenia", tr: "Turkey", cn: "China", jp: "Japan",
+  gb: "UK", se: "Sweden",
+};
+
+function parseProductTitle() {
+  const t =
+    document.querySelector('meta[property="og:title"]')?.content ||
+    document.title.replace(/\s*\|\s*Systembolaget\s*$/i, "");
+  if (!t) return null;
+  const yearMatch = t.match(/\b(19|20)\d{2}\b/);
+  const year = yearMatch ? yearMatch[0] : "";
+  const name = t
+    .replace(/,?\s*\b(19|20)\d{2}\b/g, "")
+    .replace(/\s*\|\s*Systembolaget\s*$/i, "")
+    .trim();
+  return { name, year };
+}
+
+function parseBreadcrumbCategory() {
+  const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+  for (const s of scripts) {
+    try {
+      const j = JSON.parse(s.textContent || "");
+      if (j["@type"] !== "BreadcrumbList") continue;
+      const names = (j.itemListElement || []).map((x) => (x.name || "").toLowerCase());
+      const text = names.join(" ");
+      let typeId = null;
+      let color = "";
+      if (/mousserande/.test(text)) typeId = 3;
+      else if (/ros[eé]vin|\brose\b/.test(text)) { typeId = 4; color = "rose"; }
+      else if (/r[öo]tt vin/.test(text)) { typeId = 1; color = "red"; }
+      else if (/vitt vin/.test(text)) { typeId = 2; color = "white"; }
+      else if (/starkvin/.test(text)) typeId = 24;
+      else if (/dessertvin/.test(text)) typeId = 7;
+      if (typeId === 3) {
+        if (/ros[eé]/.test(text)) color = "rose";
+        else if (/vitt|blanc/.test(text)) color = "white";
+        else if (/r[öo]tt/.test(text)) color = "red";
+      }
+      return { typeId, color };
+    } catch (_) {}
+  }
+  return { typeId: null, color: "" };
+}
+
+function buildProductCard(rating, matched) {
+  const card = document.createElement("div");
+  card.id = PRODUCT_CARD_ID;
+  card.style.cssText = [
+    "position:fixed",
+    "right:20px",
+    "bottom:20px",
+    "z-index:9999",
+    "width:320px",
+    "max-width:calc(100vw - 40px)",
+    "background:#fff",
+    "border:1px solid #d4d4d4",
+    `border-left:4px solid ${matched ? "#7c1e3e" : "#888"}`,
+    "border-radius:6px",
+    "box-shadow:0 4px 16px rgba(0,0,0,.12)",
+    "padding:14px",
+    "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif",
+    "font-size:13px",
+    "color:#222",
+    "line-height:1.45",
+  ].join(";");
+
+  const close = document.createElement("button");
+  close.innerText = "×";
+  close.title = "Hide";
+  close.style.cssText = "position:absolute;top:6px;right:8px;background:none;border:none;font-size:18px;color:#888;cursor:pointer;padding:0;line-height:1";
+  close.addEventListener("click", () => card.remove());
+  card.appendChild(close);
+
+  const header = document.createElement("div");
+  header.style.cssText = "display:flex;gap:12px;margin-bottom:8px";
+
+  if (rating.image) {
+    const img = document.createElement("img");
+    img.src = rating.image;
+    img.alt = "";
+    img.style.cssText = "width:48px;height:64px;object-fit:contain;flex-shrink:0";
+    img.referrerPolicy = "no-referrer";
+    header.appendChild(img);
+  }
+
+  const titleBlock = document.createElement("div");
+  titleBlock.style.cssText = "flex:1;min-width:0";
+
+  const title = document.createElement("div");
+  title.style.cssText = "font-weight:600;font-size:14px;line-height:1.3;margin-bottom:2px;padding-right:18px";
+  title.innerText = rating.name;
+  titleBlock.appendChild(title);
+
+  const subParts = [];
+  if (rating.region) subParts.push(rating.region);
+  if (rating.country && COUNTRY_NAMES[rating.country]) subParts.push(COUNTRY_NAMES[rating.country]);
+  if (subParts.length) {
+    const sub = document.createElement("div");
+    sub.style.cssText = "color:#666;font-size:12px;margin-bottom:4px";
+    sub.innerText = subParts.join(", ");
+    titleBlock.appendChild(sub);
+  }
+  header.appendChild(titleBlock);
+  card.appendChild(header);
+
+  const ratingRow = document.createElement("div");
+  ratingRow.style.cssText = "display:flex;align-items:baseline;gap:6px;margin:8px 0";
+  ratingRow.innerHTML =
+    `<span style="font-size:22px;font-weight:700;color:${matched ? "#7c1e3e" : "#666"}">★ ${rating.score.toFixed(1)}</span>` +
+    `<span style="color:#666;font-size:12px">${rating.numOfReviews.toLocaleString()} ratings on Vivino</span>`;
+  card.appendChild(ratingRow);
+
+  if (rating.description) {
+    const desc = document.createElement("div");
+    desc.style.cssText = "color:#444;font-size:12px;margin:8px 0;max-height:96px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical";
+    desc.innerText = rating.description;
+    card.appendChild(desc);
+  }
+
+  if (!matched) {
+    const warn = document.createElement("div");
+    warn.style.cssText = "color:#888;font-size:11px;font-style:italic;margin:6px 0";
+    warn.innerText = "Match uncertain — click through to verify on Vivino.";
+    card.appendChild(warn);
+  }
+
+  const link = document.createElement("a");
+  link.href = rating.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.innerText = "Open on Vivino →";
+  link.style.cssText = `display:inline-block;margin-top:6px;color:${matched ? "#7c1e3e" : "#555"};font-weight:600;text-decoration:none`;
+  card.appendChild(link);
+
+  return card;
+}
+
+let productCardLoadedFor = "";
+
+async function processProductPage() {
+  if (!PRODUCT_PAGE_RE.test(location.pathname)) return;
+  if (productCardLoadedFor === location.pathname) return;
+  productCardLoadedFor = location.pathname;
+
+  const titleData = parseProductTitle();
+  if (!titleData?.name) return;
+
+  const { typeId, color } = parseBreadcrumbCategory();
+  const query = titleData.name;
+  const year = titleData.year;
+
+  try {
+    const rating = await getRating({ query, year, typeId, color });
+    if (!rating || !rating.score) return;
+    if (productCardLoadedFor !== location.pathname) return; // navigated away
+    const matched = isLikelyMatch(query, rating.name);
+    document.getElementById(PRODUCT_CARD_ID)?.remove();
+    document.body.appendChild(buildProductCard(rating, matched));
+  } catch (_) {}
+}
+
+function removeProductCard() {
+  document.getElementById(PRODUCT_CARD_ID)?.remove();
+  productCardLoadedFor = "";
+}
+
 let lastUrl = "";
 
 function checkUrlChange() {
   if (location.href === lastUrl) return false;
   lastUrl = location.href;
   resetBadges();
+  removeProductCard();
   return true;
 }
 
 function scan() {
   checkUrlChange();
+  if (PRODUCT_PAGE_RE.test(location.pathname)) {
+    processProductPage();
+    return;
+  }
   const groups = findProductGroups();
   groups.forEach((anchors, href) => processGroup(href, anchors));
 }

@@ -103,5 +103,20 @@ function buildRating(hit, year) {
     ? `https://www.vivino.com/w/${hit.id}${urlYear ? `?year=${urlYear}` : ""}`
     : "https://www.vivino.com/";
 
-  return { name: displayName, score, numOfReviews, url };
+  // Vivino image URLs are protocol-relative ("//images.vivino.com/...").
+  const rawImg = hit.image?.variations?.bottle_medium || hit.image?.variations?.label_large || "";
+  const image = rawImg ? (rawImg.startsWith("//") ? "https:" + rawImg : rawImg) : "";
+
+  return {
+    name: displayName,
+    score,
+    numOfReviews,
+    url,
+    winery: wineryName,
+    region: hit.region?.name || "",
+    country: hit.region?.country || "",
+    description: hit.description || "",
+    image,
+    alcohol: hit.alcohol || null,
+  };
 }
