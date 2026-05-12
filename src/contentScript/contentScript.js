@@ -229,9 +229,12 @@ async function processGroup(href, anchors) {
 // === Product detail page ===
 //
 // On /produkt/vin/<slug>-<id>/ pages we render a richer floating card with
-// region, tasting notes and a label thumbnail. Wine identity is parsed from
-// `og:title` / `document.title` (reliable across SPA hydration timings) and
-// the breadcrumb JSON-LD provides the type/color category.
+// region, tasting notes and a label thumbnail. Wine identity is pulled from
+// the page's `__NEXT_DATA__` blob, which exposes the same fields the list
+// page renders (`productNameBold`, `productNameThin`, `vintage`, category
+// levels). Reusing the same fields + the same `buildQuery` / parseTypeAndColor
+// helpers guarantees the product-page query is byte-identical to the list
+// query, so we hit the same cache entry and the same Vivino match.
 
 const COUNTRY_NAMES = {
   fr: "France", it: "Italy", es: "Spain", pt: "Portugal", de: "Germany",
@@ -243,7 +246,49 @@ const COUNTRY_NAMES = {
   gb: "UK", se: "Sweden",
 };
 
-function parseProductTitle() {
+function findInNextData(obj, predicate, depth = 0) {
+  if (depth > 10 || !obj || typeof obj !== "object") return null;
+  if (predicate(obj)) return obj;
+  for (const k of Object.keys(obj)) {
+    const r = findInNextData(obj[k], predicate, depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+
+// Extract product number from /produkt/vin/<slug>-<number>/ — used to verify
+// __NEXT_DATA__ actually refers to the page we're looking at.
+function productNumberFromPath() {
+  const m = location.pathname.match(/-(\d+)\/?$/);
+  return m ? m[1] : "";
+}
+
+function parseProductFromNextData() {
+  const script = document.getElementById("__NEXT_DATA__");
+  if (!script) return null;
+  let json;
+  try { json = JSON.parse(script.textContent || ""); } catch (_) { return null; }
+  const expected = productNumberFromPath();
+  const p = findInNextData(json, (o) =>
+    typeof o.productNameBold === "string" &&
+    (!expected || String(o.productNumber || "") === expected)
+  );
+  if (!p) return null;
+  const name = (p.productNameBold || "").trim();
+  if (!name) return null;
+  const thin = (p.productNameThin || "").trim();
+  const year = (p.vintage || "").toString().trim();
+  const categoryLine = [p.categoryLevel2, p.categoryLevel3]
+    .filter(Boolean).join(", ").toUpperCase();
+  return { name, grapesYear: thin, year, categoryLine };
+}
+
+// SPA navigations (clicking a tile) DO update the URL and `document.title`
+// but DO NOT replace `__NEXT_DATA__`. In that case we fall back to parsing
+// the page title — same shape the list-page query uses ("name grapes, year"),
+// minus the year — so the resulting Algolia query is identical to what the
+// list card built.
+function parseProductFromTitle() {
   const t =
     document.querySelector('meta[property="og:title"]')?.content ||
     document.title.replace(/\s*\|\s*Systembolaget\s*$/i, "");
@@ -254,34 +299,25 @@ function parseProductTitle() {
     .replace(/,?\s*\b(19|20)\d{2}\b/g, "")
     .replace(/\s*\|\s*Systembolaget\s*$/i, "")
     .trim();
-  return { name, year };
+  if (!name) return null;
+  // No clean bold/thin split available — pass the full title as `name` and
+  // leave grapesYear empty; buildQuery just joins them.
+  return { name, grapesYear: "", year, categoryLine: parseCategoryFromBreadcrumb() };
 }
 
-function parseBreadcrumbCategory() {
+function parseCategoryFromBreadcrumb() {
   const scripts = document.querySelectorAll('script[type="application/ld+json"]');
   for (const s of scripts) {
     try {
       const j = JSON.parse(s.textContent || "");
       if (j["@type"] !== "BreadcrumbList") continue;
-      const names = (j.itemListElement || []).map((x) => (x.name || "").toLowerCase());
-      const text = names.join(" ");
-      let typeId = null;
-      let color = "";
-      if (/mousserande/.test(text)) typeId = 3;
-      else if (/ros[eé]vin|\brose\b/.test(text)) { typeId = 4; color = "rose"; }
-      else if (/r[öo]tt vin/.test(text)) { typeId = 1; color = "red"; }
-      else if (/vitt vin/.test(text)) { typeId = 2; color = "white"; }
-      else if (/starkvin/.test(text)) typeId = 24;
-      else if (/dessertvin/.test(text)) typeId = 7;
-      if (typeId === 3) {
-        if (/ros[eé]/.test(text)) color = "rose";
-        else if (/vitt|blanc/.test(text)) color = "white";
-        else if (/r[öo]tt/.test(text)) color = "red";
-      }
-      return { typeId, color };
+      const names = (j.itemListElement || []).map((x) => x.name || "");
+      // Skip the first two crumbs ("Startsida", "Sortiment") so the result
+      // looks like the list-page category line: "Rosévin, Friskt & Bärigt".
+      return names.slice(2).filter(Boolean).join(", ").toUpperCase();
     } catch (_) {}
   }
-  return { typeId: null, color: "" };
+  return "";
 }
 
 function buildProductCard(rating, matched) {
@@ -382,20 +418,28 @@ let productCardLoadedFor = "";
 async function processProductPage() {
   if (!PRODUCT_PAGE_RE.test(location.pathname)) return;
   if (productCardLoadedFor === location.pathname) return;
-  productCardLoadedFor = location.pathname;
 
-  const titleData = parseProductTitle();
-  if (!titleData?.name) return;
+  // Prefer __NEXT_DATA__ (clean bold/thin split). On SPA-navigated pages
+  // it's stale or missing — fall back to the page title.
+  const product = parseProductFromNextData() || parseProductFromTitle();
+  if (!product) return;
 
-  const { typeId, color } = parseBreadcrumbCategory();
-  const query = titleData.name;
-  const year = titleData.year;
+  // Lock to the path we're fetching for so a slow response from a previous
+  // product page can't end up rendered on a later one.
+  const startedFor = location.pathname;
+  productCardLoadedFor = startedFor;
+
+  const { query, year } = buildQuery({
+    name: product.name,
+    grapesYear: product.grapesYear + (product.year ? `, ${product.year}` : ""),
+  });
+  const { typeId, color } = parseTypeAndColor(product.categoryLine);
 
   try {
     const rating = await getRating({ query, year, typeId, color });
     if (!rating || !rating.score) return;
-    if (productCardLoadedFor !== location.pathname) return; // navigated away
-    const matched = isLikelyMatch(query, rating.name);
+    if (location.pathname !== startedFor) return;
+    const matched = isLikelyMatch(product.name, rating.name);
     document.getElementById(PRODUCT_CARD_ID)?.remove();
     document.body.appendChild(buildProductCard(rating, matched));
   } catch (_) {}
